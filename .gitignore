@@ -1,0 +1,58 @@
+# Environnement Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs et fichiers temporaires
+*.log
+*.pot
+*.pyc
+*.pyo
+*.sqlite3
+.DS_Store
+
+# Config Editeurs / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+
+# Django / Migrations
+db.sqlite3
+*.sqlite3
+*.pyc
+*.pyo
+__pycache__/
+*.log
+*.pot
+
+# Parquet Files (tu peux ajuster selon ton besoin)
+*.parquet
+
+# Cache Python
+*.egg-info/
+.eggs/
+
+# Coverage et tests
+.coverage
+*.cover
+htmlcov/
+.tox/
+.nox/
+.cache
+.pytest_cache/
+coverage.xml
+
+# Docker (si jamais tu l'ajoutes plus tard)
+docker-compose.override.yml
+
+# Environnements spécifiques
+.env
+.env.*
+
+# Backup ou fichiers temporaires
+*.bak
+*.tmp
+*.old
