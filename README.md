@@ -1,3 +1,6 @@
+TESTS Basés sur les travaux de "Sacha Schutz" de ce billet https://dridk.me/parquet-files.html
+
+
 Prérequis : 
     installer python3
     installer pip
