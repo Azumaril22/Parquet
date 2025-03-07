@@ -3,7 +3,7 @@ import datetime
 import hashlib
 import os
 import polars as pl
-
+import re
 
 class VCF2ParquetExporter:
     def __init__(self, filepath):
@@ -21,7 +21,7 @@ class VCF2ParquetExporter:
             'QUAL',
             'FILTER',
             'INFO',
-            'FORMAT'
+            # 'FORMAT'
         ]
 
         if self.extention == "gz":
@@ -119,7 +119,7 @@ class VCF2ParquetExporter:
         lf_sample = lf_sample.unpivot(
             index=["HASH"],
         )
-        
+
         # Rename "variable" ==> "SAMPLE" et "value" ==> "GENOTYPE"
         lf_sample = lf_sample.with_columns(
             pl.col("variable").alias("SAMPLE"),
@@ -141,8 +141,6 @@ class VCF2ParquetExporter:
 
         info_keys = self._extract_info_keys_preserve_order(df_info)
 
-        import re
-
         # Ajouter les colonnes parsées de INFO
         for key in info_keys:
             escaped_key = re.escape(key)  # Échapper les caractères spéciaux dans le nom de la clé
@@ -156,15 +154,87 @@ class VCF2ParquetExporter:
         with open(self.filepath, "r") as f_in:
             with open(self.filepath.split(".")[0] + "_entete.txt", "w") as f_out:
                 for line in f_in:
-                    f_out.write(line)
                     if line.startswith("#CHROM"):
                         break
+                    f_out.write(line)
+
+    def get_schema_polars_lazy(self, lf):
+        # Obtenir le schéma du LazyFrame
+        schema = lf.schema
+
+        # Créer un dictionnaire pour stocker les colonnes et leurs types
+        schema_dict = {name: str(dtype) for name, dtype in schema.items()}
+
+        return schema_dict
+
+class VCFEnteteToPython:
+    def __init__(self, filepath):
+        self.filepath = filepath
+
+    def parse_vcf_info_headers(self):
+        info_dicts = []
+
+        # Expression régulière pour extraire le contenu entre les chevrons
+        info_pattern = re.compile(r'##INFO=<(.+?)>')
+
+        # Expressions régulières pour extraire les attributs spécifiques
+        id_pattern = re.compile(r'ID=([^,]+)')
+        number_pattern = re.compile(r'Number=([^,]+)')
+        type_pattern = re.compile(r'Type=([^,]+)')
+        description_pattern = re.compile(r'Description=([^,]+)')
+
+        with open(self.filepath, 'r') as vcf_file:
+            for line in vcf_file:
+                # Ne traiter que les lignes qui commencent par ##INFO=
+                if line.startswith('##INFO='):
+                    # Extraire le contenu entre les chevrons
+                    match = info_pattern.search(line)
+                    if match:
+                        content = match.group(1)
+
+                        # Initialiser un dictionnaire pour stocker les attributs
+                        info_dict = {}
+
+                        # Extraire ID
+                        id_match = id_pattern.search(content)
+                        if id_match:
+                            info_dict["ID"] = id_match.group(1).replace('.', '_')
+
+                        # Extraire Number
+                        number_match = number_pattern.search(content)
+                        if number_match:
+                            info_dict["Number"] = number_match.group(1)
+
+                        # Extraire Type
+                        type_match = type_pattern.search(content)
+                        if type_match:
+                            info_dict["Type"] = type_match.group(1)
+
+                        # Extraire Description
+                        description_match = description_pattern.search(content)
+                        if description_match:
+                            info_dict["Description"] = description_match.group(1).replace('"', '')
+
+                        # Ajouter le dictionnaire à la liste
+                        info_dicts.append(info_dict)
+
+                # Arrêter la lecture une fois que les en-têtes sont terminés
+                elif not line.startswith('#'):
+                    break
+
+        return info_dicts
+
 
 if __name__ == "__main__":
     start = datetime.datetime.now()
 
     exporteur = VCF2ParquetExporter("Datasets/VCF_annovar.vcf")
     exporteur.run()
+
+    entetes = VCFEnteteToPython(
+        "Datasets/VCF_annovar_entete.txt"
+    ).parse_vcf_info_headers()
+    print(entetes)
 
     end = datetime.datetime.now()
 
@@ -175,6 +245,11 @@ if __name__ == "__main__":
 
     exporteur = VCF2ParquetExporter("Datasets/VCF_lite.vcf.gz")
     exporteur.run()
+
+    entetes = VCFEnteteToPython(
+        "Datasets/VCF_lite_entete.txt"
+    ).parse_vcf_info_headers()
+    print(entetes)
 
     end = datetime.datetime.now()
 
