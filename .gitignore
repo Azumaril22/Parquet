@@ -57,8 +57,6 @@ docker-compose.override.yml
 *.bak
 *.tmp
 *.old
-ALL.wgs.shapeit2_integrated_snvindels_v2a.GRCh38.27022019.sites.vcf
-VCF_vep.gz
-.gitignore
-VCF_annovar.vcf.gz
-VCF_lite.vcf.gz
+
+# Datasets
+Datasets/
