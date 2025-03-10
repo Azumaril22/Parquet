@@ -1,7 +1,10 @@
-from django.urls import path
-from . import views
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import ParquetViewSet
+
+router = DefaultRouter()
+router.register(r'parquet', ParquetViewSet, basename='parquet')
 
 urlpatterns = [
-    path('users/', views.user_list, name='user-list'),
-    path('users/add/', views.add_user, name='add-user'),
+    path('api/<str:file_path>/', include(router.urls)),
 ]

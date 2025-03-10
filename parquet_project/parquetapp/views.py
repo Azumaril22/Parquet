@@ -1,38 +1,49 @@
-import json
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from .models import ParquetUser
+import duckdb
+from rest_framework import viewsets
+from rest_framework.response import Response
+
+from .models import ParquetModel
 
 
-def user_list(request):
-    users = ParquetUser.all()
-    return JsonResponse([user.to_dict() for user in users], safe=False)
+# VueSet pour DRF
+class ParquetViewSet(viewsets.ViewSet):
 
+    def list(self, request, file_path=None):
+        file_path = "../db/VCF_annovar/entete_variant.parquet"
+        result = duckdb.sql("""
 
-@csrf_exempt
-def add_user(request):
-    if request.method == "POST":
-        try:
-            data = json.loads(request.body.decode('utf-8'))
-            id = int(data['id'])
-            username = data['username']
-            email = data['email']
+            SELECT * 
+            FROM '../db/VCF_annovar/entete_variant.parquet' AS ENTETE 
+            --LEFT JOIN '../db/VCF_annovar/sample_variant.parquet' AS SAMPLE ON ENTETE.HASH = SAMPLE.HASH
+            LEFT JOIN '../db/VCF_annovar/info_variant.parquet' AS INFO ON ENTETE.HASH = INFO.HASH
+            LEFT JOIN '../db/VCF_annovar/info_variant.parquet' AS INFO2 ON ENTETE.HASH = INFO2.HASH
+            ORDER BY ENTETE.HASH
+            LIMIT 10
+            OFFSET 10
+        """)
 
-            user = ParquetUser(id=id, username=username, email=email)
-            ParquetUser.save(user)
+        # Fetch all rows
+        rows = result.fetchall()
 
-            return JsonResponse({"message": "User saved"}, status=201)
+        # Get column names
+        columns = result.columns
 
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
-            return JsonResponse({"error": f"Invalid data: {e}"}, status=400)
+        # Convert to a list of dictionaries
+        data = [dict(zip(columns, row)) for row in rows]
+        return Response(data)
 
-    return JsonResponse({"error": "Invalid method"}, status=405)
+    def create(self, request, file_path=None):
+        new_entry = ParquetModel(file_path).create(**request.data)
+        return Response(new_entry.to_dict(orient='records'))
 
-""" 
-exemple POST :
-{
-  "id": "1",
-  "username": "alice",
-  "email": "alice@example.com"
-}
-"""
+    def update(self, request, file_path=None, pk=None):
+        filter_kwargs = {"hash": pk}  # Suppose que l'identifiant est "id"
+        update_kwargs = request.data
+        updated_df = ParquetModel(
+            file_path
+        ).update(filter_kwargs, update_kwargs)
+        return Response(updated_df.to_dict(orient='records'))
+
+    def destroy(self, request, file_path=None, pk=None):
+        ParquetModel(file_path).delete(hash=pk)
+        return Response({"message": "Deleted successfully"})

@@ -1,98 +1,58 @@
 import pandas as pd
-import polars as pl
-import duckdb
+import os
 
-from django.db import models
 
-class ParquetUser:
-    parquet_file = "parquetapp/data/users.parquet"
+class ParquetModel():
+    """
+    Modèle inspiré de Django pour interagir
+    avec des fichiers Parquet comme une base de données.
+    """
+    def __init__(self, file_path=None):
+        self.file_path = file_path
 
-    def __init__(self, id, username, email):
-        self.id = id
-        self.username = username
-        self.email = email
+    def load_data(self):
+        """Charge les données du fichier Parquet."""
+        if os.path.exists(self.file_path):
+            return pd.read_parquet(self.file_path)
+        return pd.DataFrame()
 
-    @classmethod
-    def all(cls):
-        try:
-            df = pd.read_parquet(cls.parquet_file)
-            return [cls(**row.to_dict()) for _, row in df.iterrows()]
-        except FileNotFoundError:
-            return []
+    def save_data(self, df):
+        """Sauvegarde les données dans un fichier Parquet."""
+        df.to_parquet(self.file_path, index=False)
 
-    @classmethod
-    def filter(cls, **conditions):
-        df = pd.read_parquet(cls.parquet_file)
-        for key, value in conditions.items():
+    def all(self):
+        """Retourne toutes les données sous forme de DataFrame."""
+        return self.load_data()
+
+    def filter(self, **kwargs):
+        """Filtre les données selon les critères fournis."""
+        df = self.load_data()
+        for key, value in kwargs.items():
             df = df[df[key] == value]
-        return [cls(**row.to_dict()) for _, row in df.iterrows()]
+        return df
 
-    @classmethod
-    def save(cls, user_obj):
-        try:
-            df = pd.read_parquet(cls.parquet_file)
-        except FileNotFoundError:
-            df = pd.DataFrame(columns=['id', 'username', 'email'])
+    def create(self, **kwargs):
+        """Crée un nouvel enregistrement."""
+        df = self.load_data()
+        new_entry = pd.DataFrame([kwargs])
+        df = pd.concat([df, new_entry], ignore_index=True)
+        self.save_data(df)
+        return new_entry
 
-        df = df[df['id'] != user_obj.id]
-        new_row = pd.DataFrame([user_obj.__dict__])
-        df = pd.concat([df, new_row], ignore_index=True)
-        df.to_parquet(cls.parquet_file)
+    def update(self, filter_kwargs, update_kwargs):
+        """Met à jour un enregistrement existant."""
+        df = self.load_data()
+        for key, value in filter_kwargs.items():
+            df.loc[
+                df[key] == value, list(update_kwargs.keys())
+            ] = list(update_kwargs.values())
+        self.save_data(df)
+        return df
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "username": self.username,
-            "email": self.email,
-        }
-
-class ParquetModel(models.Model):
-    class Meta:
-        abstract = True  # Empêche la création en base SQL
-
-    @classmethod
-    def all(cls):
-        return pd.read_parquet(cls.get_file_path())
-
-    @classmethod
-    def save_polars_df_to_parquet(cls, df, table_name=None):
-        if table_name is None:
-            table_name = cls.get_table_name()
-        df.sink_parquet(f"../db/{table_name}")
-
-    @classmethod
-    def get_file_path(cls):
-        return cls.get_table_name().lower()
-
-
-class ParquetVariantRecord:
-
-    def get_table_name(self):
-        return "variants.parquet"
-
-    # id = models.AutoField(primary_key=True)
-    # chrom = models.CharField(max_length=10)
-    # pos = models.IntegerField()
-    # ref = models.CharField(max_length=255)
-    # alt = models.CharField(max_length=255)
-    # qual = models.FloatField()
-    # filter = models.CharField(max_length=255)
-    # info = models.CharField(max_length=255)
-    # format = models.CharField(max_length=255)
-    # sample = models.CharField(max_length=255)
-
-    def get_start_line(self, vcf_file):
-        with open(vcf_file, "r") as f:
-            for i, line in enumerate(f):
-                if line.startswith("# CHROM"):
-                    return i
-
-    def load_from_vcf(self, vcf_file):
-        df = pl.scan_csv(
-            vcf_file,
-            skip_rows=self.get_start_line(vcf_file),
-            separator="\t",
-            schema_overrides={"#CHROM": pl.Utf8},
-        )
-
-        self.save_polars_df_to_parquet(df, table_name=self.get_table_name())
+    def delete(self, **kwargs):
+        """Supprime un enregistrement."""
+        df = self.load_data()
+        for key, value in kwargs.items():
+            df = df[df[key] != value]
+        self.save_data(df)
+        return df
