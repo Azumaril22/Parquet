@@ -1,10 +1,10 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ParquetViewSet
+from .views import ParquetFileViewSet
 
 router = DefaultRouter()
-router.register(r'parquet', ParquetViewSet, basename='parquet')
+router.register(r'parquet-files', ParquetFileViewSet)
 
 urlpatterns = [
-    path('api/<str:file_path>/', include(router.urls)),
+    path('api/', include(router.urls)),
 ]

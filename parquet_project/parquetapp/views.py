@@ -1,49 +1,114 @@
-import duckdb
-from rest_framework import viewsets
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
+from .models import ParquetFile
+from .serializers import ParquetFileSerializer
+from .services import ParquetManager
 
-from .models import ParquetModel
 
+class ParquetFileViewSet(viewsets.ModelViewSet):
+    queryset = ParquetFile.objects.all()
+    serializer_class = ParquetFileSerializer
+    pagination_class = PageNumberPagination
 
-# VueSet pour DRF
-class ParquetViewSet(viewsets.ViewSet):
+    # def retrieve(self, request, *args, **kwargs):
+    #     instance = self.get_object()
+    #     manager = ParquetManager(instance.file_path)
+    #     data = manager.read()
+    #     return Response(data.to_dicts())  # Convertir Polars DataFrame en liste de dictionnaires
 
-    def list(self, request, file_path=None):
-        file_path = "../db/VCF_annovar/entete_variant.parquet"
-        result = duckdb.sql("""
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        manager = ParquetManager(instance.file_path)
 
-            SELECT * 
-            FROM '../db/VCF_annovar/entete_variant.parquet' AS ENTETE 
-            --LEFT JOIN '../db/VCF_annovar/sample_variant.parquet' AS SAMPLE ON ENTETE.HASH = SAMPLE.HASH
-            LEFT JOIN '../db/VCF_annovar/info_variant.parquet' AS INFO ON ENTETE.HASH = INFO.HASH
-            LEFT JOIN '../db/VCF_annovar/info_variant.parquet' AS INFO2 ON ENTETE.HASH = INFO2.HASH
-            ORDER BY ENTETE.HASH
-            LIMIT 10
-            OFFSET 10
-        """)
+        # Récupérer les paramètres de pagination
+        paginator = self.pagination_class()
+        page_size = int(request.query_params.get('page_size', paginator.get_page_size(request)))
+        page_number = int(request.query_params.get('page', 1))
+        lier_fichiers = request.query_params.get('lier_fichiers', False) in ('true', 'True', '1')
 
-        # Fetch all rows
-        rows = result.fetchall()
+        # Calculer l'offset et la limite
+        offset = (page_number - 1) * page_size
+        limit = page_size
 
-        # Get column names
-        columns = result.columns
+        # Lire les données du fichier Parquet
+        data = manager.read(limit=limit, offset=offset, lier_fichiers=lier_fichiers)
 
-        # Convert to a list of dictionaries
-        data = [dict(zip(columns, row)) for row in rows]
-        return Response(data)
+        # Obtenir le nombre total d'enregistrements
+        total_count = manager.count(lier_fichiers)
 
-    def create(self, request, file_path=None):
-        new_entry = ParquetModel(file_path).create(**request.data)
-        return Response(new_entry.to_dict(orient='records'))
+        # Convertir les données en liste de dictionnaires
+        data_dict = data.to_dicts()
 
-    def update(self, request, file_path=None, pk=None):
-        filter_kwargs = {"hash": pk}  # Suppose que l'identifiant est "id"
-        update_kwargs = request.data
-        updated_df = ParquetModel(
-            file_path
-        ).update(filter_kwargs, update_kwargs)
-        return Response(updated_df.to_dict(orient='records'))
+        # Paginer les résultats manuellement
+        paginated_response = {
+            "count": total_count,
+            "next": self.get_next_link(request, total_count, page_number, page_size),
+            "previous": self.get_previous_link(request, page_number, page_size),
+            "results": data_dict,
+        }
+        return Response(paginated_response)
 
-    def destroy(self, request, file_path=None, pk=None):
-        ParquetModel(file_path).delete(hash=pk)
-        return Response({"message": "Deleted successfully"})
+    def get_next_link(self, request, total_count, page_number, page_size):
+        if (int(page_number) * page_size) >= total_count:
+            return None
+        # Construire l'URL absolue avec l'URL de base
+        return request.build_absolute_uri(f"?page={page_number + 1}&page_size={page_size}")
+
+    def get_previous_link(self, request, page_number, page_size):
+        if int(page_number) <= 1:
+            return None
+        # Construire l'URL absolue avec l'URL de base
+        return request.build_absolute_uri(f"?page={page_number - 1}&page_size={page_size}")
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        manager = ParquetManager(serializer.data['file_path'])
+        manager.create(request.data.get('data', []))
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        manager = ParquetManager(instance.file_path)
+        manager.update(request.data.get('data', []))
+        return Response(status=status.HTTP_200_OK)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        manager = ParquetManager(instance.file_path)
+        manager.delete()
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['post'], url_path='add-data')
+    def add_data(self, request, *args, **kwargs):
+        instance = self.get_object()
+        manager = ParquetManager(instance.file_path)
+        manager.add_data(request.data)
+        return Response(status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='delete-data')
+    def delete_data(self, request, *args, **kwargs):
+        instance = self.get_object()
+        manager = ParquetManager(instance.file_path)
+
+        hashes = request.data.get('hashes', None)
+        if hashes is None:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+        if not isinstance(hashes, list):
+            hashes = [hashes]
+
+        manager.delete_data_by_hashes(hashes)
+        return Response(status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='update-data')
+    def update_data(self, request, *args, **kwargs):
+        instance = self.get_object()
+        manager = ParquetManager(instance.file_path)
+
+        manager.update_data_by_hashes(request.data)
+        return Response(status=status.HTTP_200_OK)
