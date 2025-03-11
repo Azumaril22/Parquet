@@ -1,11 +1,13 @@
-import polars as pl
 import hashlib
-from typing import Set
 from collections import OrderedDict
+from typing import Set
+
+import polars as pl
 
 # -------------------
 # Étape 1 - Lecture échantillon et extraction des clés INFO
 # -------------------
+
 
 def extract_info_keys(sample_df: pl.DataFrame) -> Set[str]:
     """
@@ -23,8 +25,11 @@ def extract_info_keys(sample_df: pl.DataFrame) -> Set[str]:
 
     return keys
 
+
 def extract_info_keys_preserve_order(sample_df: pl.DataFrame):
-    keys = OrderedDict()  # Conserve l'ordre d'apparition (première apparition par ligne)
+    keys = (
+        OrderedDict()
+    )  # Conserve l'ordre d'apparition (première apparition par ligne)
     for info in sample_df["INFO"]:
         if isinstance(info, str):
             for pair in info.split(";"):
@@ -34,12 +39,13 @@ def extract_info_keys_preserve_order(sample_df: pl.DataFrame):
                         keys[key] = True  # Premier passage uniquement
     return list(keys.keys())  # Retourne une liste ordonnée
 
+
 # Lecture d'un échantillon en eager pour récupérer les clés INFO
 sample_df = pl.read_csv(
     "Datasets/VCF_annovar.vcf",
     skip_rows=444,
     separator="\t",
-    infer_schema_length=1000  # Limite pour ne pas parser tout le fichier
+    infer_schema_length=1000,  # Limite pour ne pas parser tout le fichier
 ).head(10000)
 
 info_keys = extract_info_keys_preserve_order(sample_df)
@@ -49,6 +55,7 @@ print(f"Clés détectées dans INFO: {sorted(info_keys)}")
 # -------------------
 # Étape 2 - Création du LazyFrame complet avec parsing dynamique
 # -------------------
+
 
 # Fonction pour extraire la valeur d'une clé spécifique dans INFO (en Lazy)
 def extract_key(key: str):
@@ -75,9 +82,7 @@ lf = pl.scan_csv(
 
 # Extraction des clés dynamiques
 for key in info_keys:
-    lf = lf.with_columns(
-        pl.col("INFO").str.extract(rf"{key}=([^;]*)").alias(key)
-    )
+    lf = lf.with_columns(pl.col("INFO").str.extract(rf"{key}=([^;]*)").alias(key))
 
 # Optionnel : essai de cast (float, int, etc.)
 for key in info_keys:
@@ -93,7 +98,9 @@ for key in info_keys:
 # Hash unique basé sur CHROM, POS, REF, ALT
 lf = lf.with_columns(
     pl.concat_str(["#CHROM", "POS", "REF", "ALT"], separator="_")
-    .map_elements(lambda x: hashlib.sha256(x.encode()).hexdigest(), return_dtype=pl.Utf8)
+    .map_elements(
+        lambda x: hashlib.sha256(x.encode()).hexdigest(), return_dtype=pl.Utf8
+    )
     .alias("hash")
 )
 

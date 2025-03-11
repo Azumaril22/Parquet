@@ -1,7 +1,8 @@
-from collections import OrderedDict
 import datetime
 import hashlib
 import os
+from collections import OrderedDict
+
 import polars as pl
 
 
@@ -13,15 +14,15 @@ class VCF2ParquetExporter:
 
         # Liste des colonnes à mettre dans entete_variant
         self.ENTETE_COLUMNS = [
-            '#CHROM',
-            'POS',
-            'ID',
-            'REF',
-            'ALT',
-            'QUAL',
-            'FILTER',
-            'INFO',
-            'FORMAT'
+            "#CHROM",
+            "POS",
+            "ID",
+            "REF",
+            "ALT",
+            "QUAL",
+            "FILTER",
+            "INFO",
+            "FORMAT",
         ]
 
         if self.extention == "gz":
@@ -36,6 +37,7 @@ class VCF2ParquetExporter:
     def unzip(self):
         print("Unzipping...")
         import gzip
+
         with gzip.open(self.filepath, "rb") as f_in:
             with open(self.filepath[:-3], "wb") as f_out:
                 f_out.write(f_in.read())
@@ -70,9 +72,9 @@ class VCF2ParquetExporter:
         lf = lf.with_columns(
             pl.concat_str(["#CHROM", "POS", "REF", "ALT"], separator="_")
             .map_elements(
-                lambda x: hashlib.sha256(x.encode()).hexdigest(),
-                return_dtype=pl.Utf8
-            ).alias("HASH")
+                lambda x: hashlib.sha256(x.encode()).hexdigest(), return_dtype=pl.Utf8
+            )
+            .alias("HASH")
         )
 
         return lf

@@ -1,6 +1,5 @@
 import duckdb
 import polars as pl
-
 from parquetapp.models import LienEntreFichiersParquet, ParquetFile
 
 
@@ -10,16 +9,29 @@ class ParquetManager:
         self.alias = ParquetFile.objects.get(file_path=file_path).get_alias()
 
     def get_columns(self, lier_fichiers=False):
-        columns = ParquetFile.objects.get(file_path=self.file_path).get_columns(["HASH", "INFO"])
+        columns = ParquetFile.objects.get(file_path=self.file_path).get_columns(
+            ["HASH", "INFO"]
+        )
 
         if lier_fichiers:
             # Ajouter les colonnes des fichiers joints en excluant les colonnes HASH et INFO qui sont dupliquées
-            for file in LienEntreFichiersParquet.objects.filter(file_1__file_path=self.file_path):
-                columns += ParquetFile.objects.get(file_path=file.file_2.file_path).get_columns(exclude=["HASH", "INFO"])
+            for file in LienEntreFichiersParquet.objects.filter(
+                parquet_file_right__file_path=self.file_path
+            ):
+                columns += ParquetFile.objects.get(
+                    file_path=file.parquet_file_left.file_path
+                ).get_columns(exclude=["HASH", "INFO"])
 
         return columns
 
-    def get_query(self, limit=100, offset=None, order_by=None, lier_fichiers=False, count_only=False):
+    def get_query(
+        self,
+        limit=100,
+        offset=None,
+        order_by=None,
+        lier_fichiers=False,
+        count_only=False,
+    ):
         if count_only:
             query = "SELECT count(*) "
         else:
@@ -31,8 +43,10 @@ class ParquetManager:
         query += f" FROM read_parquet('{self.file_path}') AS '{self.alias}'"
 
         if lier_fichiers:
-            for file in LienEntreFichiersParquet.objects.filter(file_1__file_path=self.file_path):
-                query += f" LEFT JOIN read_parquet('{file.file_2.file_path}')  AS '{file.file_2.get_alias()}' ON {file.file_1.get_alias()}.{file.field} = {file.file_2.get_alias()}.{file.field}"
+            for file in LienEntreFichiersParquet.objects.filter(
+                parquet_file_right__file_path=self.file_path
+            ):
+                query += f" LEFT JOIN read_parquet('{file.parquet_file_left.file_path}')  AS '{file.parquet_file_left.get_alias()}' ON {file.parquet_file_right.get_alias()}.{file.field} = {file.parquet_file_left.get_alias()}.{file.field}"
 
         if count_only:
             return query
@@ -93,5 +107,6 @@ class ParquetManager:
 
     def delete(self):
         import os
+
         if os.path.exists(self.file_path):
             os.remove(self.file_path)

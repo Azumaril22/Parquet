@@ -1,11 +1,10 @@
 import json
 import time
-import requests
 
+import requests
 from django.http import HttpResponse
 from django.views import View
-
-from parquetapp.models import ParquetFile
+from parquetapp.models import ParquetFile, ParquetFileColumn
 
 
 def add_head_to_html(html):
@@ -53,36 +52,28 @@ class PerformanceTestView(View):
                 "nb_requests": 10,
                 "test_case": "Durée de chargement 1000 enregistrements sur fichier non liés",
                 "REQUEST_METHOD": "GET",
-                "body": {
-
-                },
+                "body": {},
             },
             {
                 "url": base_url + "/?page=1&page_size=1000&lier_fichiers=True",
                 "nb_requests": 10,
                 "test_case": "Durée de chargement 1000 enregistrements sur fichier liés",
                 "REQUEST_METHOD": "GET",
-                "body": {
-
-                },
+                "body": {},
             },
             {
                 "url": base_url + "/?page=1&page_size=100&lier_fichiers=False",
                 "nb_requests": 10,
                 "test_case": "Durée de chargement 100 enregistrements sur fichier non liés",
                 "REQUEST_METHOD": "GET",
-                "body": {
-
-                },
+                "body": {},
             },
             {
                 "url": base_url + "/?page=1&page_size=100&lier_fichiers=True",
                 "nb_requests": 10,
                 "test_case": "Durée de chargement 100 enregistrements sur fichier liés",
                 "REQUEST_METHOD": "GET",
-                "body": {
-
-                },
+                "body": {},
             },
             {
                 "url": base_url + "/add-data/",
@@ -98,7 +89,7 @@ class PerformanceTestView(View):
                     "ALT": "A",
                     "QUAL": 3414.93,
                     "FILTER": "PASS",
-                    "INFO": "TEST"
+                    "INFO": "TEST",
                 },
             },
             # {
@@ -197,4 +188,17 @@ class PerformanceTestView(View):
         )
         if "<!DOCTYPE html>" not in response_html:
             response_html = add_head_to_html(response_html)
+        return HttpResponse(response_html, content_type="text/html; charset=utf-8")
+
+
+class ListColumsInFile(View):
+    def get(self, request, *args, **kwargs):
+        columns = ParquetFileColumn.objects.all()
+        response_html = "<table><thead><tr><th>File</th><th>Column Name</th><th>Type VCF</th><th>Type Parquet</th></tr></thead><tbody>"
+        for column in columns:
+            response_html += f"<tr><td>{column.parquet_file.file_path}</td><td>{column.name}</td><td>{column.data_type_from_vcf}</td><td>{column.data_type_from_duckdb}</td></tr>"
+
+        response_html += "</tbody></table>"
+
+        response_html = add_head_to_html(response_html)
         return HttpResponse(response_html, content_type="text/html; charset=utf-8")

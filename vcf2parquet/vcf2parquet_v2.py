@@ -117,7 +117,7 @@ class VCF2ParquetExporter:
         # === UNPIVOT ===
         # Unpivot ["HASH", "SAMPLE1" "SAMPLE2"] -> ["HASH", "SAMPLE", "GENOTYPE"]
         lf_sample = lf_sample.unpivot(
-            index=["HASH"],
+            index=["HASH", "FORMAT"],
         )
 
         # Rename "variable" ==> "SAMPLE" et "value" ==> "GENOTYPE"
@@ -166,6 +166,7 @@ class VCF2ParquetExporter:
         schema_dict = {name: str(dtype) for name, dtype in schema.items()}
 
         return schema_dict
+
 
 class VCFEnteteToPython:
     def __init__(self, filepath):

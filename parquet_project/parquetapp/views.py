@@ -1,7 +1,8 @@
-from rest_framework import viewsets, status
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
+
 from .models import ParquetFile
 from .serializers import ParquetFileSerializer
 from .services import ParquetManager
@@ -24,9 +25,15 @@ class ParquetFileViewSet(viewsets.ModelViewSet):
 
         # Récupérer les paramètres de pagination
         paginator = self.pagination_class()
-        page_size = int(request.query_params.get('page_size', paginator.get_page_size(request)))
-        page_number = int(request.query_params.get('page', 1))
-        lier_fichiers = request.query_params.get('lier_fichiers', False) in ('true', 'True', '1')
+        page_size = int(
+            request.query_params.get("page_size", paginator.get_page_size(request))
+        )
+        page_number = int(request.query_params.get("page", 1))
+        lier_fichiers = request.query_params.get("lier_fichiers", False) in (
+            "true",
+            "True",
+            "1",
+        )
 
         # Calculer l'offset et la limite
         offset = (page_number - 1) * page_size
@@ -54,26 +61,30 @@ class ParquetFileViewSet(viewsets.ModelViewSet):
         if (int(page_number) * page_size) >= total_count:
             return None
         # Construire l'URL absolue avec l'URL de base
-        return request.build_absolute_uri(f"?page={page_number + 1}&page_size={page_size}")
+        return request.build_absolute_uri(
+            f"?page={page_number + 1}&page_size={page_size}"
+        )
 
     def get_previous_link(self, request, page_number, page_size):
         if int(page_number) <= 1:
             return None
         # Construire l'URL absolue avec l'URL de base
-        return request.build_absolute_uri(f"?page={page_number - 1}&page_size={page_size}")
+        return request.build_absolute_uri(
+            f"?page={page_number - 1}&page_size={page_size}"
+        )
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
-        manager = ParquetManager(serializer.data['file_path'])
-        manager.create(request.data.get('data', []))
+        manager = ParquetManager(serializer.data["file_path"])
+        manager.create(request.data.get("data", []))
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
         manager = ParquetManager(instance.file_path)
-        manager.update(request.data.get('data', []))
+        manager.update(request.data.get("data", []))
         return Response(status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
@@ -83,19 +94,19 @@ class ParquetFileViewSet(viewsets.ModelViewSet):
         self.perform_destroy(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-    @action(detail=True, methods=['post'], url_path='add-data')
+    @action(detail=True, methods=["post"], url_path="add-data")
     def add_data(self, request, *args, **kwargs):
         instance = self.get_object()
         manager = ParquetManager(instance.file_path)
         manager.add_data(request.data)
         return Response(status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['post'], url_path='delete-data')
+    @action(detail=True, methods=["post"], url_path="delete-data")
     def delete_data(self, request, *args, **kwargs):
         instance = self.get_object()
         manager = ParquetManager(instance.file_path)
 
-        hashes = request.data.get('hashes', None)
+        hashes = request.data.get("hashes", None)
         if hashes is None:
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
@@ -105,7 +116,7 @@ class ParquetFileViewSet(viewsets.ModelViewSet):
         manager.delete_data_by_hashes(hashes)
         return Response(status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['post'], url_path='update-data')
+    @action(detail=True, methods=["post"], url_path="update-data")
     def update_data(self, request, *args, **kwargs):
         instance = self.get_object()
         manager = ParquetManager(instance.file_path)
