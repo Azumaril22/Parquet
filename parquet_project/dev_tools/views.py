@@ -32,6 +32,15 @@ def add_head_to_html(html):
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .Flag{
+            color: green
+        }
+        .DOUBLE, .Float{
+            color: yellow
+        }
+        .BIGINT, .Integer{
+            color: orange
+        }
     </style>
 </head>
 """
@@ -196,7 +205,7 @@ class ListColumsInFile(View):
         columns = ParquetFileColumn.objects.all()
         response_html = "<table><thead><tr><th>File</th><th>Column Name</th><th>Type VCF</th><th>Type Parquet</th></tr></thead><tbody>"
         for column in columns:
-            response_html += f"<tr><td>{column.parquet_file.file_path}</td><td>{column.name}</td><td>{column.data_type_from_vcf}</td><td>{column.data_type_from_duckdb}</td></tr>"
+            response_html += f"<tr><td>{column.parquet_file.file_path}</td><td>{column.name}</td><td class='{column.data_type_from_vcf}'>{column.data_type_from_vcf}</td><td class='{column.data_type_from_duckdb}'>{column.data_type_from_duckdb}</td></tr>"
 
         response_html += "</tbody></table>"
 

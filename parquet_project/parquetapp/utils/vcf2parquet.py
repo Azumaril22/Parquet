@@ -1,19 +1,21 @@
+import glob
 import hashlib
 import os
+import duckdb
 import polars as pl
 import re
 
 from collections import OrderedDict
 
+from dev_tools.utils import timeit
+from parquetapp.services import ParquetManager
 from parquetapp.models import LienEntreFichiersParquet, ParquetFile
 
 
+@timeit
 def auto_cast_columns_lazy(lf: pl.LazyFrame) -> pl.LazyFrame:
-    import datetime
-    start = datetime.datetime.now()
-    lf.sink_csv("../db/temp.csv")
-    lf = pl.scan_csv("../db/temp.csv", infer_schema_length=1000000)
-    print(f"Temps d'execution trsf CSV: {datetime.datetime.now() - start}")
+    # lf.sink_csv("../db/temp.csv")
+    # lf = pl.scan_csv("../db/temp.csv", infer_schema_length=1000000)
     return lf
 
 class VCF2ParquetExporter:
@@ -24,7 +26,7 @@ class VCF2ParquetExporter:
 
         # Liste des colonnes à mettre dans entete_variant
         self.ENTETE_COLUMNS = [
-            "CHROM",
+            "#CHROM",
             "POS",
             "ID",
             "REF",
@@ -72,6 +74,8 @@ class VCF2ParquetExporter:
 
         self.create_linkend_files()
 
+        self.compile_parquet()
+
     def get_lf(self):
 
         # Chargement du fichier VCF
@@ -82,12 +86,9 @@ class VCF2ParquetExporter:
             schema_overrides={"#CHROM": pl.Utf8},
         )
 
-        # Renommer #CHROM en CHROM
-        lf = lf.with_columns(pl.col("#CHROM").alias("CHROM"))
-
         # === AJOUT DU HASH ===
         lf = lf.with_columns(
-            pl.concat_str(["CHROM", "POS", "REF", "ALT"], separator="_")
+            pl.concat_str(["#CHROM", "POS", "REF", "ALT"], separator="_")
             .map_elements(
                 lambda x: hashlib.sha256(x.encode()).hexdigest(), return_dtype=pl.Utf8
             )
@@ -102,6 +103,8 @@ class VCF2ParquetExporter:
                 if line.startswith("#CHROM"):
                     return i
 
+    def get_filename(self, export_path):
+        return export_path.split(".parquet")[0].replace("../db/", "").replace("/", "_")
 
     def extract_entete_vcf(self):
         with open(self.filepath, "r") as f_in:
@@ -128,19 +131,22 @@ class VCF2ParquetExporter:
         entete_columns = ["HASH"] + self.ENTETE_COLUMNS
 
         lf_entete = self.lf.select(
-            [col for col in entete_columns if col in self.lf.columns]
+            [pl.col("#CHROM").alias("CHROM")] + [col for col in entete_columns if col in self.lf.collect_schema().names()]
         )
+
+        lf_entete = lf_entete.drop("#CHROM")
 
         export_path = self.export_path + "entete_variant.parquet"
         lf_entete.sink_parquet(export_path)
+        filename = self.get_filename(export_path)
         self.entete_variant_django_file_object, _ = ParquetFile.objects.update_or_create(
-            name=export_path.split(".")[0], defaults={"file_path": export_path}
+            name=filename, defaults={"file_path": export_path}
         )
 
     def export_sample_variant(self):
         # === EXPORT SAMPLE_VARIANT ===
         sample_columns = [
-            col for col in self.lf.columns if col not in self.ENTETE_COLUMNS
+            col for col in self.lf.collect_schema().names() if col not in self.ENTETE_COLUMNS
         ]
 
         lf_sample = self.lf.select(sample_columns)
@@ -162,9 +168,10 @@ class VCF2ParquetExporter:
         lf_sample = lf_sample.drop(["variable", "value"])
 
         export_path = self.export_path + "sample_variant.parquet"
+        filename = self.get_filename(export_path)
         lf_sample.sink_parquet(export_path)
         self.sample_variant_django_file_object, _ = ParquetFile.objects.update_or_create(
-            name=export_path.split(".")[0], defaults={"file_path": export_path}
+            name=filename, defaults={"file_path": export_path}
         )
 
     def export_info_variant(self):
@@ -188,17 +195,80 @@ class VCF2ParquetExporter:
                 .alias(key.replace(".", "_"))
             )
 
+        # Ajouter les colonnes parsées de INFO avec gestion de "."
+        # for key in info_keys:
+        #     escaped_key = re.escape(key)  # Échapper les caractères spéciaux
+
+        #     lf_info = lf_info.with_columns(
+        #         pl.when(
+        #             pl.col("INFO").str.extract(rf"{escaped_key}=([^;]*)") == "."
+        #         )
+        #         .then(None)
+        #         .otherwise(pl.col("INFO").str.extract(rf"{escaped_key}=([^;]*)"))
+        #         .alias(key.replace(".", "_"))
+        #     )
+
         # Essaie de convertir dynamiquement la colonne en Int, Float ou laisse en Utf8 si conversion impossible
         lf_info = auto_cast_columns_lazy(lf_info)
 
         export_path = self.export_path + "info_variant.parquet"
         lf_info.sink_parquet(export_path)
-        ParquetFile.objects.update_or_create(
-            name=export_path.split(".")[0], defaults={"file_path": export_path}
-        )
+        filename = self.get_filename(export_path)
         self.info_variant_django_file_object, _ = ParquetFile.objects.update_or_create(
-            name=export_path.split(".")[0], defaults={"file_path": export_path}
+            name=filename, defaults={"file_path": export_path}
         )
+
+    @timeit
+    def compile_parquet(self):
+        export_path = self.export_path + "compile_variant"
+        query = ParquetManager(self.entete_variant_django_file_object.file_path).get_query(
+            limit=None,
+            offset=None,
+            order_by=None,
+            lier_fichiers=True
+        )
+
+        query_count = ParquetManager(self.entete_variant_django_file_object.file_path).get_query(
+            limit=None,
+            offset=None,
+            order_by=None,
+            lier_fichiers=True,
+            count_only=True
+        )
+        result = duckdb.sql(query_count).fetchone()
+        print(result)
+
+        duckdb.sql(
+            f"COPY ({query}) TO '{export_path}' (FORMAT PARQUET, OVERWRITE, PARTITION_BY (SAMPLE))"
+        )
+
+        # Modifier la structure d'export des fichiers
+        # Trouver tous les fichiers exportés
+        for folder in os.listdir(export_path):
+            folder_path = os.path.join(export_path, folder)
+            
+            if os.path.isdir(folder_path) and folder.startswith("SAMPLE="):  # Vérifie les partitions
+                sample_value = folder.split("=")[1]  # Extrait ID_SAMPLE
+                parquet_files = glob.glob(os.path.join(folder_path, "*.parquet"))
+                
+                for old_file in parquet_files:
+                    new_file = os.path.join(export_path, f'{sample_value}.parquet')
+                    os.rename(old_file, new_file)
+                    
+                    filename = self.get_filename(new_file)
+                    ParquetFile.objects.update_or_create(
+                        name=filename, defaults={"file_path": new_file}
+                    )
+
+                # Supprimer le dossier vide après déplacement
+                os.rmdir(folder_path)
+
+        print("Fichiers renommés avec succès !")
+
+        # filename = self.get_filename(export_path)
+        # ParquetFile.objects.update_or_create(
+        #     name=filename, defaults={"file_path": export_path}
+        # )
 
     def get_schema_polars_lazy(self, lf):
         # Obtenir le schéma du LazyFrame

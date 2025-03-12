@@ -42,7 +42,8 @@ class ParquetFile(models.Model):
         for col in duckdb.sql(
             f"DESCRIBE SELECT * FROM read_parquet('{self.file_path}')"
         ).fetchall():
-            print(col)
+            if col[1] != "VARCHAR":
+                print(col)
             ParquetFileColumn.objects.update_or_create(
                 parquet_file=self,
                 name=col[0],

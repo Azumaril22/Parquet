@@ -17,8 +17,8 @@ class Command(BaseCommand):
         exporteur.run()
         # Lire le schema du fichier parquet pour en déduire les colonnes et leurs types
         exporteur.info_variant_django_file_object.set_colums()
-        print(exporteur.info_variant_django_file_object.name)
-        self.stdout.write(str(exporteur.info_variant_django_file_object.name), style_func=self.style.ERROR)
+
+        self.stdout.write("FileName : " + str(exporteur.info_variant_django_file_object.name), style_func=self.style.SUCCESS)
         # Lire l'entete du fichier VCF pour déduire les colonnes et leurs types
         entetes = VCFEnteteToPython(
             filepath.replace(".gz", "").replace(".vcf", "_entete.txt")
