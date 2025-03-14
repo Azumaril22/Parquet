@@ -6,13 +6,13 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('parquetapp', '0002_lienentrefichiersparquet'),
+        ("parquetapp", "0002_lienentrefichiersparquet"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='parquetfile',
-            name='alias',
+            model_name="parquetfile",
+            name="alias",
             field=models.CharField(blank=True, max_length=255, null=True),
         ),
     ]

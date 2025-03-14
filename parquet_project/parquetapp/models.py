@@ -1,17 +1,17 @@
 import duckdb
 from django.db import models
 
+from dev_tools.utils import timeit
+from parquetapp.utils.data_type import get_column_dtype
+
 
 class ParquetFile(models.Model):
-    name = models.CharField(max_length=255, unique=True)
+    name = models.CharField(max_length=255)
     file_path = models.CharField(max_length=512)
+    original_vcf_file_path = models.CharField(max_length=512, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    alias = models.CharField(
-        max_length=255,
-        blank=True,
-        null=True
-    )
+    alias = models.CharField(max_length=255, blank=True, null=True)
 
     def __str__(self):
         return self.name
@@ -38,31 +38,39 @@ class ParquetFile(models.Model):
 
         return columns
 
+    @timeit
     def set_colums(self):
         for col in duckdb.sql(
             f"DESCRIBE SELECT * FROM read_parquet('{self.file_path}')"
         ).fetchall():
             if col[1] != "VARCHAR":
-                print(col)
+                if col[1] in ("FLOAT", "REAL", "DOUBLE", "DECIMAL"):
+                    dtype = "Float"
+                elif col[1] in ("BIGINT", "SMALLINT", "TINYINT"):
+                    dtype = "Integer"
+                else:
+                    dtype = col[1]
+            else:
+                dtype = get_column_dtype(
+                    datatable=self.file_path,
+                    col=col[0]
+                )
+
             ParquetFileColumn.objects.update_or_create(
                 parquet_file=self,
                 name=col[0],
                 defaults={
-                    "data_type_from_duckdb": col[1],
-                }
+                    "data_type_from_duckdb": dtype,
+                },
             )
 
 
 class LienEntreFichiersParquet(models.Model):
     parquet_file_right = models.ForeignKey(
-        ParquetFile,
-        on_delete=models.CASCADE,
-        related_name="parquet_file_right"
+        ParquetFile, on_delete=models.CASCADE, related_name="parquet_file_right"
     )
     parquet_file_left = models.ForeignKey(
-        ParquetFile,
-        on_delete=models.CASCADE,
-        related_name="parquet_file_left"
+        ParquetFile, on_delete=models.CASCADE, related_name="parquet_file_left"
     )
     field = models.CharField(max_length=255)
 

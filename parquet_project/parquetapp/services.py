@@ -35,7 +35,9 @@ class ParquetManager:
         if count_only:
             query = "SELECT count(*) "
         else:
-            query = f'SELECT {self.alias}.HASH AS "HASH", {self.alias}.INFO AS "INFO", "'
+            query = (
+                f'SELECT {self.alias}.HASH AS "HASH", {self.alias}.INFO AS "INFO", "'
+            )
             columns = self.get_columns(lier_fichiers)
             query += '", "'.join(columns)
             query += '"'

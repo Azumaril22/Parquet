@@ -1,9 +1,11 @@
-from collections import OrderedDict
 import datetime
 import hashlib
 import os
-import polars as pl
 import re
+from collections import OrderedDict
+
+import polars as pl
+
 
 class VCF2ParquetExporter:
     def __init__(self, filepath):
@@ -13,14 +15,14 @@ class VCF2ParquetExporter:
 
         # Liste des colonnes à mettre dans entete_variant
         self.ENTETE_COLUMNS = [
-            '#CHROM',
-            'POS',
-            'ID',
-            'REF',
-            'ALT',
-            'QUAL',
-            'FILTER',
-            'INFO',
+            "#CHROM",
+            "POS",
+            "ID",
+            "REF",
+            "ALT",
+            "QUAL",
+            "FILTER",
+            "INFO",
             # 'FORMAT'
         ]
 
@@ -36,6 +38,7 @@ class VCF2ParquetExporter:
     def unzip(self):
         print("Unzipping...")
         import gzip
+
         with gzip.open(self.filepath, "rb") as f_in:
             with open(self.filepath[:-3], "wb") as f_out:
                 f_out.write(f_in.read())
@@ -71,9 +74,9 @@ class VCF2ParquetExporter:
         lf = lf.with_columns(
             pl.concat_str(["#CHROM", "POS", "REF", "ALT"], separator="_")
             .map_elements(
-                lambda x: hashlib.sha256(x.encode()).hexdigest(),
-                return_dtype=pl.Utf8
-            ).alias("HASH")
+                lambda x: hashlib.sha256(x.encode()).hexdigest(), return_dtype=pl.Utf8
+            )
+            .alias("HASH")
         )
 
         return lf
@@ -143,9 +146,13 @@ class VCF2ParquetExporter:
 
         # Ajouter les colonnes parsées de INFO
         for key in info_keys:
-            escaped_key = re.escape(key)  # Échapper les caractères spéciaux dans le nom de la clé
+            escaped_key = re.escape(
+                key
+            )  # Échapper les caractères spéciaux dans le nom de la clé
             lf_info = lf_info.with_columns(
-                pl.col("INFO").str.extract(rf"{escaped_key}=([^;]*)").alias(key.replace(".", "_"))
+                pl.col("INFO")
+                .str.extract(rf"{escaped_key}=([^;]*)")
+                .alias(key.replace(".", "_"))
             )
 
         lf_info.sink_parquet(self.export_path + "info_variant.parquet")
@@ -176,18 +183,18 @@ class VCFEnteteToPython:
         info_dicts = []
 
         # Expression régulière pour extraire le contenu entre les chevrons
-        info_pattern = re.compile(r'##INFO=<(.+?)>')
+        info_pattern = re.compile(r"##INFO=<(.+?)>")
 
         # Expressions régulières pour extraire les attributs spécifiques
-        id_pattern = re.compile(r'ID=([^,]+)')
-        number_pattern = re.compile(r'Number=([^,]+)')
-        type_pattern = re.compile(r'Type=([^,]+)')
-        description_pattern = re.compile(r'Description=([^,]+)')
+        id_pattern = re.compile(r"ID=([^,]+)")
+        number_pattern = re.compile(r"Number=([^,]+)")
+        type_pattern = re.compile(r"Type=([^,]+)")
+        description_pattern = re.compile(r"Description=([^,]+)")
 
-        with open(self.filepath, 'r') as vcf_file:
+        with open(self.filepath, "r") as vcf_file:
             for line in vcf_file:
                 # Ne traiter que les lignes qui commencent par ##INFO=
-                if line.startswith('##INFO='):
+                if line.startswith("##INFO="):
                     # Extraire le contenu entre les chevrons
                     match = info_pattern.search(line)
                     if match:
@@ -199,7 +206,7 @@ class VCFEnteteToPython:
                         # Extraire ID
                         id_match = id_pattern.search(content)
                         if id_match:
-                            info_dict["ID"] = id_match.group(1).replace('.', '_')
+                            info_dict["ID"] = id_match.group(1).replace(".", "_")
 
                         # Extraire Number
                         number_match = number_pattern.search(content)
@@ -214,13 +221,15 @@ class VCFEnteteToPython:
                         # Extraire Description
                         description_match = description_pattern.search(content)
                         if description_match:
-                            info_dict["Description"] = description_match.group(1).replace('"', '')
+                            info_dict["Description"] = description_match.group(
+                                1
+                            ).replace('"', "")
 
                         # Ajouter le dictionnaire à la liste
                         info_dicts.append(info_dict)
 
                 # Arrêter la lecture une fois que les en-têtes sont terminés
-                elif not line.startswith('#'):
+                elif not line.startswith("#"):
                     break
 
         return info_dicts
@@ -247,9 +256,7 @@ if __name__ == "__main__":
     exporteur = VCF2ParquetExporter("Datasets/VCF_lite.vcf.gz")
     exporteur.run()
 
-    entetes = VCFEnteteToPython(
-        "Datasets/VCF_lite_entete.txt"
-    ).parse_vcf_info_headers()
+    entetes = VCFEnteteToPython("Datasets/VCF_lite_entete.txt").parse_vcf_info_headers()
     print(entetes)
 
     end = datetime.datetime.now()
