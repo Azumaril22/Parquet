@@ -20,6 +20,26 @@ class VCFEnteteToPython:
             parsed_columns += self.parse_vcf_headers(entete_ligne_a_parser)
         return parsed_columns
 
+    def get_csq_columns(self):
+        with open(self.filepath, 'r', encoding='utf-8') as file:
+            for line in file:
+                if "ID=CSQ" in line:
+                    csq_line = line
+                    break
+
+        if csq_line is None:
+            print("Aucune ligne contenant 'ID=CSQ' trouvée dans le fichier.")
+            return None
+
+        # Extraire le format après "Format: " jusqu'à la fin de la ligne
+        match = re.search(r'Format: (.*?)">', csq_line)
+        if match:
+            csq_format = match.group(1).split('|')
+            return csq_format  # Retourne la ligne complète et la liste des colonnes
+        else:
+            print("Impossible d'extraire le format CSQ.")
+            return None
+
     def parse_vcf_headers(self, entete_ligne_a_parser="INFO"):
         parsed_dicts = []
 

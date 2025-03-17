@@ -9,7 +9,7 @@ import polars as pl
 from dev_tools.utils import timeit
 from parquetapp.models import LienEntreFichiersParquet, ParquetFile
 from parquetapp.services import ParquetManager
-
+from parquetapp.utils.entetesvcf2parquet import VCFEnteteToPython
 
 
 class VCF2ParquetExporter:
@@ -34,13 +34,14 @@ class VCF2ParquetExporter:
         if self.extention == "gz":
             self.unzip()
 
-        if not self.extention in ("vcf", "vep"):
-
+        if self.extention not in ("vcf", "vep"):
             raise ValueError("Le fichier doit avoir l'extension .vcf ou .vep")
 
         self.export_path = self.get_export_path()
         self.lf = self.get_lf()
 
+        self.vcf_has_sample_column = False
+        self.info_has_csq_key = False
         self.entete_variant_django_file_object = None
         self.sample_variant_django_file_object = None
         self.info_variant_django_file_object = None
@@ -48,7 +49,11 @@ class VCF2ParquetExporter:
     def run(self):
         self.export_entete_variant()
         self.export_sample_variant()
+        if self.vcf_has_sample_column:
+            self.pivot_parquet_sample()
         self.export_info_variant()
+        if self.info_has_csq_key:
+            self.split_csq_key()
         self.extract_entete_vcf()
 
         self._create_linkend_files()
@@ -183,6 +188,7 @@ class VCF2ParquetExporter:
         lf_sample = self.lf.select(sample_columns)
 
         if "FORMAT" in lf_sample.collect_schema().names():
+            self.vcf_has_sample_column = True
             export_path = self.export_path + "sample_variant.parquet"
 
             # === UNPIVOT ===
@@ -260,6 +266,9 @@ class VCF2ParquetExporter:
                 .alias(key.replace(".", "_"))
             )
 
+        if "CSQ" in key:
+            self.info_has_csq_key = True
+
         # Ajouter les colonnes parsées de INFO avec gestion de "."
         # for key in info_keys:
         #     escaped_key = re.escape(key)  # Échapper les caractères spéciaux
@@ -278,6 +287,54 @@ class VCF2ParquetExporter:
 
         # Référencer le fichier dans la base de données
         self.info_variant_django_file_object = self._reference_file(export_path)
+
+    def split_csq_key(self):
+        csq_format = VCFEnteteToPython(self.filepath).get_csq_columns()
+        
+        # Vérifier que csq_format est bien défini
+        if not csq_format:
+            raise ValueError("csq_format est vide ! Vérifie que la ligne ID=CSQ a bien été extraite.")
+
+        if self.info_variant_django_file_object:
+            export_path = self.export_path + "info_csq_variant.parquet"
+
+            lf_csq = pl.scan_parquet(
+                self.info_variant_django_file_object.file_path,
+            )
+
+            # Étape 1: Séparer les valeurs "CSQ" en plusieurs lignes sur la base de ","
+            lf_csq = lf_csq.with_columns(
+                pl.col("CSQ").str.split(",").alias("CSQ_list")  # Créer une liste de valeurs séparées par ","
+            ).explode("CSQ_list")  # Déplier la liste en plusieurs lignes
+
+            # Étape 2: Séparer les valeurs "CSQ_list" en plusieurs colonnes sur la base de "|"
+            lf_csq = lf_csq.with_columns(
+                pl.col("CSQ_list").str.split("|").alias("CSQ_split")  # Transformer en liste
+            )
+
+            # Extraction des colonnes dynamiquement en respectant csq_format
+            columns = [
+                pl.col("CSQ_split").list.get(i).alias(name)
+                for i, name in enumerate(csq_format)
+            ]
+
+            # Ajouter ces nouvelles colonnes et supprimer les colonnes temporaires
+            lf_csq = lf_csq.with_columns(
+                columns
+            ).drop(
+                ["CSQ", "CSQ_list", "CSQ_split"]
+            )
+
+            # Exporter le résultat en Parquet
+            export_path = self.export_path + "info_csq_variant.parquet"
+            lf_csq.sink_parquet(export_path)
+
+            # Référencer le fichier dans la base de données
+            self.sample_variant_django_file_object = self._reference_file(export_path)
+        
+        else:
+            print("csq_format:", csq_format)
+            print("self.info_variant_django_file_object", self.info_variant_django_file_object)
 
     def reorganise_parquet_partition_files(self, export_path):
         # Modifier la structure d'export des fichiers
@@ -323,3 +380,49 @@ class VCF2ParquetExporter:
             self.reorganise_parquet_partition_files(export_path)
         except duckdb.BinderException as e:
             print(e)
+
+    @timeit
+    def pivot_parquet_sample(self, file=None):
+        if self.sample_variant_django_file_object is None and file is None:
+            print("If file is not provided, self.sample_variant_django_file_object should be created before pivot_parquet_sample.")
+            raise ValueError("If file is not provided, self.sample_variant_django_file_object should be created before pivot_parquet_sample.")
+        elif file is None:
+            file = self.sample_variant_django_file_object.file_path
+
+        export_path = self.export_path + "sample_variant_unpivot.parquet"
+
+        # Obtenir les samples uniques
+        samples = []
+        for sample in duckdb.sql(
+            f"SELECT DISTINCT SAMPLE FROM '{file}'"
+        ).fetchall():
+            samples.append(sample[0])
+
+        select_clauses = ["HASH"]
+        excluded_columns = ["FORMAT", "VALEUR"]
+        pivot_column = ["SAMPLE",]
+
+        columns_to_pivot = []
+        for column in duckdb.sql(f"SELECT * FROM '{file}' LIMIT 1").columns:
+            if column not in select_clauses + pivot_column + excluded_columns:
+                columns_to_pivot.append(column)
+
+        # Créer les parties de la requête SQL dynamiquement
+        for sample in samples:
+            for col in columns_to_pivot:
+                col_name = f"SAMPLE_{sample}_{col.replace('SAMPLE_', '')}"
+                select_clauses.append(f"MAX(CASE WHEN SAMPLE = '{sample}' THEN {col} END) AS {col_name}")
+
+        # Construire la requête complète
+        query = f"""
+        SELECT
+            {','.join(select_clauses)}
+        FROM '{file}'
+        GROUP BY HASH
+        """
+
+        duckdb.sql(
+            f"COPY ({query}) TO '{export_path}' (FORMAT PARQUET)"
+        )
+
+        self._reference_file(export_path)
