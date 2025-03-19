@@ -1,6 +1,7 @@
 import duckdb
 import re
 
+
 def detect_data_type(value):
     """
     Détecte le type de données d'une valeur en Python, y compris les notations scientifiques.
@@ -73,33 +74,25 @@ def get_list_dtype(values):
     return "String"
 
 
-def get_column_dtype(datatable, col):
-    query = f"""
-        SELECT DISTINCT "{col}"
-        FROM '{datatable}'
-        WHERE TRIM("{col}") <> '.'
-        ORDER BY "{col}" DESC
-    """
-    try:
-        liste = duckdb.sql(query).fetchall()
-        detected_type = get_list_dtype(liste)
-        return detected_type
-    except Exception as e:
-        print(query)
-        raise e
+def get_column_dtype(datatable, col, dtype=None):
+    detected_type = ""
+    if dtype != "VARCHAR":
+        if dtype in ("FLOAT", "REAL", "DOUBLE", "DECIMAL"):
+            detected_type = "Float"
+        elif dtype in ("BIGINT", "SMALLINT", "TINYINT"):
+            detected_type = "Integer"
+    else:
+        query = f"""
+            SELECT DISTINCT "{col}"
+            FROM '{datatable}'
+            WHERE TRIM("{col}") <> '.'
+            ORDER BY "{col}" DESC
+        """
+        try:
+            liste = duckdb.sql(query).fetchall()
+            detected_type = get_list_dtype(liste)
+        except Exception as e:
+            print(query)
+            raise e
 
-
-def try_numeric_tests_datatype(datatable, col):
-    query = f"""
-        SELECT DISTINCT "{col}"
-        FROM '{datatable}'
-        WHERE TRY_CAST("{col}" AS DOUBLE) < 100
-        ORDER BY TRY_CAST("{col}" AS DOUBLE) DESC
-    """
-    try:
-        duckdb.sql(query).fetchall()
-        return True
-
-    except:
-        return False
-
+    return detected_type

@@ -46,9 +46,6 @@ htmlcov/
 .pytest_cache/
 coverage.xml
 
-# Docker (si jamais tu l'ajoutes plus tard)
-docker-compose.override.yml
-
 # Environnements spécifiques
 .env
 .env.*
@@ -60,3 +57,4 @@ docker-compose.override.yml
 
 # Datasets
 Datasets/
+db/

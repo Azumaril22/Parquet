@@ -12,8 +12,8 @@ class VCF2ParquetExporter:
         self.filename = self.filepath.split("/")[-1]
         self.extention = self.filename.split(".")[-1]
 
-        # Liste des colonnes à mettre dans entete_variant
-        self.ENTETE_COLUMNS = [
+        # Liste des colonnes à mettre dans variant.parquet
+        self.VARIANT_COLUMNS = [
             "#CHROM",
             "POS",
             "ID",
@@ -54,7 +54,7 @@ class VCF2ParquetExporter:
         return export_path
 
     def run(self):
-        self.export_entete_variant()
+        self.export_variant()
         self.export_sample_variant()
         self.export_info_variant()
 
@@ -97,20 +97,20 @@ class VCF2ParquetExporter:
                             keys[key] = True
         return list(keys.keys())
 
-    def export_entete_variant(self):
-        # === EXPORT ENTETE_VARIANT ===
-        entete_columns = ["HASH"] + self.ENTETE_COLUMNS
+    def export_variant(self):
+        # === EXPORT VARIANT ===
+        variant_columns = ["HASH"] + self.VARIANT_COLUMNS
 
         lf_entete = self.lf.select(
-            [col for col in entete_columns if col in self.lf.columns]
+            [col for col in variant_columns if col in self.lf.columns]
         )
 
-        lf_entete.sink_parquet(self.export_path + "entete_variant.parquet")
+        lf_entete.sink_parquet(self.export_path + "variant.parquet")
 
     def export_sample_variant(self):
         # === EXPORT SAMPLE_VARIANT ===
         sample_columns = [
-            col for col in self.lf.columns if col not in self.ENTETE_COLUMNS
+            col for col in self.lf.columns if col not in self.VARIANT_COLUMNS
         ]
 
         lf_sample = self.lf.select(sample_columns)

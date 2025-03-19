@@ -1,21 +1,46 @@
+import duckdb
 import glob
 import hashlib
 import os
+import polars as pl
 import re
+import shutil
+
 from collections import OrderedDict
 
-import duckdb
-import polars as pl
 from dev_tools.utils import timeit
+from parquetapp.utils.bdml_model import create_bdml
 from parquetapp.models import LienEntreFichiersParquet, ParquetFile
 from parquetapp.services import ParquetManager
 from parquetapp.utils.entetesvcf2parquet import VCFEnteteToPython
 
 
+def generate_select(file, all_columns, alias):
+    return "SELECT " + ", ".join(
+        [f"{col} AS {alias[col]}" if col in duckdb.sql(f"DESCRIBE SELECT * FROM read_parquet('{file}')").df()["column_name"].tolist() 
+        else f"NULL AS {alias[col]}" for col in all_columns]
+    ) + f" FROM read_parquet('{file}', hive_partitioning=0)"
+
+
+def remove_tmp_files(path):
+    """
+    Supprime tous les fichiers et le dossier spécifié.
+    Args:
+        path (str): Chemin du dossier à supprimer.
+    """
+    if not os.path.exists(path):
+        return
+
+    try:
+        shutil.rmtree(path)  # Supprime le dossier et tout son contenu
+    except Exception as e:
+        print(f"Erreur en supprimant {path}: {e}")
+
+
 class VCF2ParquetExporter:
 
-    # Liste des colonnes à mettre dans entete_variant
-    ENTETE_COLUMNS = [
+    # Liste des colonnes à mettre dans variant.parquet
+    VARIANT_COLUMNS = [
         "#CHROM",
         "POS",
         "ID",
@@ -42,23 +67,28 @@ class VCF2ParquetExporter:
 
         self.vcf_has_sample_column = False
         self.info_has_csq_key = False
-        self.entete_variant_django_file_object = None
+        self.variant_django_file_object = None
         self.sample_variant_django_file_object = None
         self.info_variant_django_file_object = None
+        self.info_csq_variant_django_file_object = None
 
     def run(self):
-        self.export_entete_variant()
-        self.export_sample_variant()
-        if self.vcf_has_sample_column:
-            self.pivot_parquet_sample()
-        self.export_info_variant()
-        if self.info_has_csq_key:
-            self.split_csq_key()
         self.extract_entete_vcf()
 
-        self._create_linkend_files()
+        self.export_variant()
+        self.export_sample_variant()
+        self.export_info_variant()
 
+        if self.vcf_has_sample_column:
+            self.pivot_parquet_sample()
+
+        if self.info_has_csq_key:
+            self.split_csq_key()
+
+        self._create_linkend_files()
         self.compile_parquet()
+
+        # create_bdml(vcf_file_path=self.filepath)
 
     def unzip(self):
         import gzip
@@ -103,7 +133,7 @@ class VCF2ParquetExporter:
             schema_overrides={"#CHROM": pl.Utf8},
         )
 
-        # === AJOUT DU HASH ===
+        # AJOUT DU HASH
         lf = lf.with_columns(
             pl.concat_str(["#CHROM", "POS", "REF", "ALT"], separator="_")
             .map_elements(
@@ -113,31 +143,6 @@ class VCF2ParquetExporter:
         )
 
         return lf
-
-    def _create_linkend_files(self):
-        if (
-            self.entete_variant_django_file_object
-            and self.sample_variant_django_file_object
-            and self.info_variant_django_file_object
-        ):
-
-            LienEntreFichiersParquet.objects.get_or_create(
-                parquet_file_right=self.entete_variant_django_file_object,
-                parquet_file_left=self.sample_variant_django_file_object,
-                field="HASH",
-            )
-            LienEntreFichiersParquet.objects.get_or_create(
-                parquet_file_right=self.entete_variant_django_file_object,
-                parquet_file_left=self.info_variant_django_file_object,
-                field="HASH",
-            )
-            LienEntreFichiersParquet.objects.get_or_create(
-                parquet_file_right=self.sample_variant_django_file_object,
-                parquet_file_left=self.info_variant_django_file_object,
-                field="HASH",
-            )
-        else:
-            print("There is no file to link.")
 
     def _extract_info_keys_preserve_order(self, sample_df: pl.DataFrame):
         """Extrait les clés de INFO en conservant l'ordre d'apparition"""
@@ -161,28 +166,29 @@ class VCF2ParquetExporter:
         )
         return django_file_object
 
-    def export_entete_variant(self):
-        # === EXPORT ENTETE_VARIANT ===
-        entete_columns = ["HASH"] + self.ENTETE_COLUMNS
+    def export_variant(self):
+        # === EXPORT VARIANT ===
+        VARIANT_COLUMNS = ["HASH"] + self.VARIANT_COLUMNS
 
         lf_entete = self.lf.select(
             [pl.col("#CHROM").alias("CHROM")]
-            + [col for col in entete_columns if col in self.lf.collect_schema().names()]
+            + [col for col in VARIANT_COLUMNS if col in self.lf.collect_schema().names()]
         )
 
         lf_entete = lf_entete.drop("#CHROM")
 
-        export_path = self.export_path + "entete_variant.parquet"
+        export_path = self.export_path + "variant.parquet"
         lf_entete.sink_parquet(export_path)
 
-        self.entete_variant_django_file_object = self._reference_file(export_path)
+        self.variant_django_file_object = self._reference_file(export_path)
 
-    def export_sample_variant(self):
+    @timeit
+    def export_sample_variant(self, lazy=True):
         # === EXPORT SAMPLE_VARIANT ===
         sample_columns = [
             col
             for col in self.lf.collect_schema().names()
-            if col not in self.ENTETE_COLUMNS
+            if col not in self.VARIANT_COLUMNS
         ]
 
         lf_sample = self.lf.select(sample_columns)
@@ -200,47 +206,104 @@ class VCF2ParquetExporter:
 
             sample_columns += ["HASH", "FORMAT"]
 
-            # Rename "variable" ==> "SAMPLE" et "value" ==> "GENOTYPE"
+            # Rename "variable" ==> "SAMPLE" et "value" ==> "VALUE"
             lf_sample = lf_sample.with_columns(
                 pl.col("variable").alias("SAMPLE"),
-                pl.col("value").alias("VALEUR"),
+                pl.col("value").alias("VALUES"),
             )
 
-            sample_columns += ["SAMPLE", "VALEUR"]
+            sample_columns += ["SAMPLE", "VALUES"]
 
             # Suppression des colonnes "variable" et "value"
             lf_sample = lf_sample.drop(["variable", "value"])
 
+            tmp_export_path = self.export_path + "tmp/sample_variant.parquet"
+            if not os.path.exists(self.export_path + "tmp/"):
+                os.makedirs(self.export_path + "tmp/")
+
+            lf_sample.sink_parquet(tmp_export_path)
+
+            # === EXTRACT KEY / VALUES ===
             # Splitter les colonnes en listes
-            lf_sample = lf_sample.with_columns(
-                [
-                    pl.col("FORMAT").str.split(":").alias("keys"),
-                    pl.col("VALEUR").str.split(":").alias("values"),
-                ]
-            )
+            if lazy:
+                all_columns = set()
+                tmp_parquet_files = []
+                tmp_file_id = 0
+                for row in duckdb.sql(f"SELECT FORMAT FROM read_parquet('{tmp_export_path}') GROUP BY FORMAT").fetchall():
+                    keys = row[0]
+                    all_columns.update(keys.split(":"))
+                    tmp_file_id += 1
+                    tmp_key_export_path = f"{self.export_path}tmp/{tmp_file_id}sample_variant.parquet"
 
-            # Créer un dictionnaire clé -> valeur par ligne
-            lf_sample = lf_sample.with_columns(
-                pl.struct(["keys", "values"])
-                .map_elements(
-                    lambda row: dict(zip(row["keys"], row["values"])),
-                    return_dtype=pl.Struct,
+                    duckdb.sql(f"COPY (SELECT * FROM '{tmp_export_path}' WHERE FORMAT = '{keys}') TO '{tmp_key_export_path}' (FORMAT PARQUET)")
+                    lf_key = pl.scan_parquet(tmp_key_export_path)
+
+                    # Séparer les valeurs "VALUE" en plusieurs colonnes sur la base de ":"
+                    lf_key = lf_key.with_columns(
+                        pl.col("VALUES").str.split(":").alias("VALUES_split")  # Transformer en liste
+                    )
+
+                    # Extraction des colonnes dynamiquement en respectant keys
+                    columns = [
+                        pl.col("VALUES_split").list.get(i).alias(name)
+                        for i, name in enumerate(keys.split(":"))
+                    ]
+
+                    # Ajouter ces nouvelles colonnes et supprimer les colonnes temporaires
+                    lf_key = lf_key.with_columns(
+                        columns
+                    ).drop(
+                        ["VALUES_split"]
+                    )
+
+                    # Exporter le résultat en Parquet
+                    tmp_key_splited_export_path = f"{self.export_path}tmp/{tmp_file_id}_splited_sample_variant.parquet"
+                    lf_key.sink_parquet(tmp_key_splited_export_path)
+                    tmp_parquet_files.append(tmp_key_splited_export_path)
+
+                alias = {col: f"SAMPLE_{col}" for col in all_columns}
+                alias.update({col: col for col in ["HASH", "FORMAT", "SAMPLE", "VALUES"]})
+
+                all_columns.update(["HASH", "FORMAT", "SAMPLE", "VALUES"])
+                
+                query = " UNION ALL ".join([
+                    generate_select(file, all_columns, alias)
+                    for file in tmp_parquet_files]
                 )
-                .alias("kv_dict")
-            ).drop(["keys", "values"])
 
-            # Transformer le dictionnaire en colonnes séparées
-            lf_sample = lf_sample.unnest("kv_dict")
+                duckdb.sql(f"COPY ({query}) TO '{export_path}' (FORMAT PARQUET)")
+                remove_tmp_files(self.export_path + "tmp/")
 
-            # Collecter le résultat
-            df = lf_sample.collect()
+            else:
+                lf_sample = lf_sample.with_columns(
+                    [
+                        pl.col("FORMAT").str.split(":").alias("keys"),
+                        pl.col("VALUE").str.split(":").alias("values"),
+                    ]
+                )
 
-            # Renommer les colonnes créées en "SAMPLE_{col}"
-            df = df.rename(
-                {col: f"SAMPLE_{col}" for col in df.schema if col not in sample_columns}
-            )
-            # Ecrire le fichier parquet (ici en df à cause de "unnest")
-            df.write_parquet(export_path)
+                # Créer un dictionnaire clé -> valeur par ligne
+                lf_sample = lf_sample.with_columns(
+                    pl.struct(["keys", "values"])
+                    .map_elements(
+                        lambda row: dict(zip(row["keys"], row["values"])),
+                        return_dtype=pl.Struct,
+                    )
+                    .alias("kv_dict")
+                ).drop(["keys", "values"])
+
+                # Transformer le dictionnaire en colonnes séparées
+                lf_sample = lf_sample.unnest("kv_dict")
+
+                # Collecter le résultat
+                df = lf_sample.collect()
+
+                # Renommer les colonnes créées en "SAMPLE_{col}"
+                df = df.rename(
+                    {col: f"SAMPLE_{col}" for col in df.schema if col not in sample_columns}
+                )
+                # Ecrire le fichier parquet (ici en df à cause de "unnest")
+                df.write_parquet(export_path)
 
             # Référencer le fichier dans la base de données
             self.sample_variant_django_file_object = self._reference_file(export_path)
@@ -290,24 +353,22 @@ class VCF2ParquetExporter:
 
     def split_csq_key(self):
         csq_format = VCFEnteteToPython(self.filepath).get_csq_columns()
-        
+
         # Vérifier que csq_format est bien défini
         if not csq_format:
             raise ValueError("csq_format est vide ! Vérifie que la ligne ID=CSQ a bien été extraite.")
 
         if self.info_variant_django_file_object:
-            export_path = self.export_path + "info_csq_variant.parquet"
-
             lf_csq = pl.scan_parquet(
                 self.info_variant_django_file_object.file_path,
             )
 
-            # Étape 1: Séparer les valeurs "CSQ" en plusieurs lignes sur la base de ","
+            # Séparer les valeurs "CSQ" en plusieurs lignes sur la base de ","
             lf_csq = lf_csq.with_columns(
                 pl.col("CSQ").str.split(",").alias("CSQ_list")  # Créer une liste de valeurs séparées par ","
             ).explode("CSQ_list")  # Déplier la liste en plusieurs lignes
 
-            # Étape 2: Séparer les valeurs "CSQ_list" en plusieurs colonnes sur la base de "|"
+            # Séparer les valeurs "CSQ_list" en plusieurs colonnes sur la base de "|"
             lf_csq = lf_csq.with_columns(
                 pl.col("CSQ_list").str.split("|").alias("CSQ_split")  # Transformer en liste
             )
@@ -330,11 +391,35 @@ class VCF2ParquetExporter:
             lf_csq.sink_parquet(export_path)
 
             # Référencer le fichier dans la base de données
-            self.sample_variant_django_file_object = self._reference_file(export_path)
-        
+            self.info_csq_variant_django_file_object = self._reference_file(export_path)
+
         else:
             print("csq_format:", csq_format)
             print("self.info_variant_django_file_object", self.info_variant_django_file_object)
+
+    @timeit
+    def compile_parquet(self):
+        export_path = self.export_path + "compile_variant"
+        query = ParquetManager(
+            self.variant_django_file_object.file_path
+        ).get_query(limit=None, offset=None, order_by=None, lier_fichiers=True)
+
+        query_count = ParquetManager(
+            self.variant_django_file_object.file_path
+        ).get_query(
+            limit=None, offset=None, order_by=None, lier_fichiers=True, count_only=True
+        )
+        result = duckdb.sql(query_count).fetchone()[0]
+        print("Nb de lignes dans le fichier : ", export_path, result)
+
+        try:
+            duckdb.sql(
+                f"COPY ({query}) TO '{export_path}' (FORMAT PARQUET, OVERWRITE, PARTITION_BY (SAMPLE))"
+            )
+            self.reorganise_parquet_partition_files(export_path)
+        except duckdb.BinderException as e:
+            print(e)
+            print(query)
 
     def reorganise_parquet_partition_files(self, export_path):
         # Modifier la structure d'export des fichiers
@@ -357,29 +442,6 @@ class VCF2ParquetExporter:
                 os.rmdir(folder_path)
 
         print("Fichiers renommés avec succès !")
-
-    @timeit
-    def compile_parquet(self):
-        export_path = self.export_path + "compile_variant"
-        query = ParquetManager(
-            self.entete_variant_django_file_object.file_path
-        ).get_query(limit=None, offset=None, order_by=None, lier_fichiers=True)
-
-        query_count = ParquetManager(
-            self.entete_variant_django_file_object.file_path
-        ).get_query(
-            limit=None, offset=None, order_by=None, lier_fichiers=True, count_only=True
-        )
-        result = duckdb.sql(query_count).fetchone()[0]
-        print("Nb de lignes dans le fichier : ", export_path, result)
-
-        try:
-            duckdb.sql(
-                f"COPY ({query}) TO '{export_path}' (FORMAT PARQUET, OVERWRITE, PARTITION_BY (SAMPLE))"
-            )
-            self.reorganise_parquet_partition_files(export_path)
-        except duckdb.BinderException as e:
-            print(e)
 
     @timeit
     def pivot_parquet_sample(self, file=None):
@@ -426,3 +488,43 @@ class VCF2ParquetExporter:
         )
 
         self._reference_file(export_path)
+
+    def _create_linkend_files(self):
+        if (
+            self.variant_django_file_object
+            and self.sample_variant_django_file_object
+            and self.info_variant_django_file_object
+        ):
+            LienEntreFichiersParquet.objects.get_or_create(
+                parquet_file_right=self.variant_django_file_object,
+                parquet_file_left=self.sample_variant_django_file_object,
+                field="HASH",
+            )
+            LienEntreFichiersParquet.objects.get_or_create(
+                parquet_file_right=self.variant_django_file_object,
+                parquet_file_left=self.info_variant_django_file_object,
+                field="HASH",
+            )
+            LienEntreFichiersParquet.objects.get_or_create(
+                parquet_file_right=self.sample_variant_django_file_object,
+                parquet_file_left=self.info_variant_django_file_object,
+                field="HASH",
+            )
+            if self.info_csq_variant_django_file_object:
+                LienEntreFichiersParquet.objects.get_or_create(
+                    parquet_file_right=self.variant_django_file_object,
+                    parquet_file_left=self.info_csq_variant_django_file_object,
+                    field="HASH",
+                )
+                LienEntreFichiersParquet.objects.get_or_create(
+                    parquet_file_right=self.sample_variant_django_file_object,
+                    parquet_file_left=self.info_csq_variant_django_file_object,
+                    field="HASH",
+                )
+                LienEntreFichiersParquet.objects.get_or_create(
+                    parquet_file_right=self.info_variant_django_file_object,
+                    parquet_file_left=self.info_csq_variant_django_file_object,
+                    field="HASH",
+                )
+        else:
+            print("There is no file to link.")

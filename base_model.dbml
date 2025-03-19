@@ -1,0 +1,79 @@
+// Use DBML to define your database structure
+// Docs: https://dbml.dbdiagram.io/docs
+
+Table variant.parquet {
+  CHROM varchar
+  HASH varchar
+  POS bigint
+  ID varchar
+  REF varchar
+  ALT varchar
+  QUAL double
+  FILTER varchar
+  INFO varchar
+}
+
+Table info_variant.parquet {
+    HASH varchar
+    INFO varchar
+    ____start_extra_col ___
+    AC varchar
+    AF varchar
+    AN varchar
+    BaseQRankSum varchar
+    DP varchar
+    ExcessHet varchar
+    ____end_extra_col ___
+}
+
+Table info_csq_variant.parquet {
+    HASH varchar
+    INFO varchar
+    ____start_extra_col ___
+    HGVSg varchar
+    SYMBOL varchar
+    Feature varchar
+    BIOTYPE varchar
+    HGVSc varchar
+    HGVSp varchar
+    ____end_extra_col ___
+}
+
+
+Table sample_variant.parquet {
+  // body text [note: 'Content of the post']
+  HASH varchar
+  FORMAT varchar
+  SAMPLE varchar
+  VALEUR varchar
+  ____strat_extra_col ___
+  SAMPLE_GT varchar
+  SAMPLE_AD varchar
+  SAMPLE_DP varchar
+  SAMPLE_GQ varchar
+  SAMPLE_PL varchar
+  SAMPLE_PGT varchar
+  SAMPLE_PID varchar
+  SAMPLE_PS varchar
+  ____end_extra_col ___
+}
+
+Table sample_variant_unpivot.parquet {
+    HASH varchar
+    ____strat_extra_col ___
+    SAMPLE_SAMPLEID_GT varchar
+    SAMPLE_SAMPLEID_AD varchar
+    SAMPLE_SAMPLEID_DP varchar
+    SAMPLE_SAMPLEID_GQ varchar
+    SAMPLE_SAMPLEID_PL varchar
+    SAMPLE_SAMPLEID_PGT varchar
+    SAMPLE_SAMPLEID_PID varchar
+    SAMPLE_SAMPLEID_PS varchar
+  ____end_extra_col ___
+}
+
+Ref: variant.parquet.HASH < info_variant.parquet.HASH
+Ref: variant.parquet.HASH < sample_variant.parquet.HASH
+Ref: info_variant.parquet.HASH < info_csq_variant.parquet.HASH
+Ref: sample_variant.parquet.HASH > sample_variant_unpivot.parquet.HASH
+Ref: variant.parquet.HASH - sample_variant_unpivot.parquet.HASH

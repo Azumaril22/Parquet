@@ -43,18 +43,11 @@ class ParquetFile(models.Model):
         for col in duckdb.sql(
             f"DESCRIBE SELECT * FROM read_parquet('{self.file_path}')"
         ).fetchall():
-            if col[1] != "VARCHAR":
-                if col[1] in ("FLOAT", "REAL", "DOUBLE", "DECIMAL"):
-                    dtype = "Float"
-                elif col[1] in ("BIGINT", "SMALLINT", "TINYINT"):
-                    dtype = "Integer"
-                else:
-                    dtype = col[1]
-            else:
-                dtype = get_column_dtype(
-                    datatable=self.file_path,
-                    col=col[0]
-                )
+            dtype = get_column_dtype(
+                datatable=self.file_path,
+                col=col[0],
+                dtype=col[1]
+            )
 
             ParquetFileColumn.objects.update_or_create(
                 parquet_file=self,
